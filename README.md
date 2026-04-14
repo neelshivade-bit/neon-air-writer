@@ -1,2 +1,14 @@
-# neon-air-writer
-An AI-powered computer vision application that lets you draw digital neon art in mid-air using hand gestures. By mapping real-world hand movements to screen coordinates, it turns your webcam into a high-precision canvas.
+# 🎨 Air Hand Gesture Neon Writer
+
+This is an AI-powered drawing application. It uses your webcam to track your hand gestures and lets you draw neon art in the air!
+
+### 🚀 Features
+- **Real-time Hand Tracking:** Uses MediaPipe to track your index finger.
+- **Neon Effects:** Smooth glowing lines with rainbow colors.
+- **Full-Screen Canvas:** Optimized to reach every corner of the screen.
+
+### 🛠️ Tech Stack
+- Python
+- Streamlit
+- OpenCV
+- MediaPipe
