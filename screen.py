@@ -5,7 +5,7 @@ import av
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# Initialize MediaPipe Hands
+# Standard MediaPipe initialization
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
@@ -16,6 +16,7 @@ st.write("Instruction: Raise **Index Finger** to draw. Raise **Index + Middle** 
 
 class VideoProcessor:
     def __init__(self):
+        # Initialize the hand tracking model
         self.hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
@@ -30,43 +31,43 @@ class VideoProcessor:
         img = cv2.flip(img, 1)
         h, w, _ = img.shape
 
-        # Initialize canvas if it doesn't exist
+        # Create drawing canvas if it doesn't exist
         if self.canvas is None or self.canvas.shape != img.shape:
             self.canvas = np.zeros_like(img)
 
-        # Process landmarks
+        # Process hand landmarks
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_img)
 
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                # 8 is Index Tip, 12 is Middle Tip, 6 is Index Knuckle, 10 is Middle Knuckle
-                itip = hand_landmarks.landmark[8]
-                mtip = hand_landmarks.landmark[12]
+                # Get tips and knuckles for logic
+                itip = hand_landmarks.landmark[8]  # Index Tip
+                mtip = hand_landmarks.landmark[12] # Middle Tip
                 iknuckle = hand_landmarks.landmark[6]
                 mknuckle = hand_landmarks.landmark[10]
                 
                 x, y = int(itip.x * w), int(itip.y * h)
 
-                # DRAWING MODE: Index up, Middle down
+                # DRAWING MODE: Index finger up, Middle finger down
                 if itip.y < iknuckle.y and mtip.y > mknuckle.y:
                     if self.prev_x != 0 and self.prev_y != 0:
                         cv2.line(self.canvas, (self.prev_x, self.prev_y), (x, y), (0, 255, 255), 10)
                     self.prev_x, self.prev_y = x, y
-                # HOVER/STOP MODE: Both fingers up or down
+                # STOP MODE: Otherwise stop drawing
                 else:
                     self.prev_x, self.prev_y = 0, 0
         else:
             self.prev_x, self.prev_y = 0, 0
 
-        # Create Neon Effect
+        # Create Neon Effect by layering blur and original lines
         glow = cv2.GaussianBlur(self.canvas, (13, 13), 0)
         img = cv2.addWeighted(img, 0.6, glow, 0.4, 0)
         img = cv2.add(img, self.canvas)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# Streamer Configuration
+# WebRTC Streamer Setup
 webrtc_streamer(
     key="neon-writer-render",
     mode=WebRtcMode.SENDRECV,
