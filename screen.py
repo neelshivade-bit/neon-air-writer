@@ -5,19 +5,14 @@ import av
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# --- ULTRA-SAFE MEDIAPIPE LOADING ---
-try:
-    mp_hands = mp.solutions.hands
-    mp_drawing = mp.solutions.drawing_utils
-except AttributeError:
-    # Fallback for specific cloud environments
-    import mediapipe.python.solutions.hands as mp_hands
-    import mediapipe.python.solutions.drawing_utils as mp_drawing
+# Initialize MediaPipe Hands
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
 
 st.set_page_config(page_title="Neon Air Writer", layout="wide")
 
 st.title("🎨 Neon Air Writer")
-st.write("Instruction: Raise **Index Finger** to draw. Raise **Index + Middle** to stop.")
+st.write("Instruction: Raise **Index Finger** to draw. Raise **Index + Middle** to stop/move.")
 
 class VideoProcessor:
     def __init__(self):
@@ -35,43 +30,49 @@ class VideoProcessor:
         img = cv2.flip(img, 1)
         h, w, _ = img.shape
 
+        # Initialize canvas if it doesn't exist
         if self.canvas is None or self.canvas.shape != img.shape:
             self.canvas = np.zeros_like(img)
 
-        # Process Hand Landmarks
+        # Process landmarks
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_img)
 
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                # Landmark 8 is Index Tip, 12 is Middle Tip
-                idx_tip = hand_landmarks.landmark[8]
-                mid_tip = hand_landmarks.landmark[12]
+                # 8 is Index Tip, 12 is Middle Tip, 6 is Index Knuckle, 10 is Middle Knuckle
+                itip = hand_landmarks.landmark[8]
+                mtip = hand_landmarks.landmark[12]
+                iknuckle = hand_landmarks.landmark[6]
+                mknuckle = hand_landmarks.landmark[10]
                 
-                x, y = int(idx_tip.x * w), int(idx_tip.y * h)
+                x, y = int(itip.x * w), int(itip.y * h)
 
-                # Drawing Logic: Draw only if Index is up and Middle is down
-                if idx_tip.y < hand_landmarks.landmark[6].y and mid_tip.y > hand_landmarks.landmark[10].y:
+                # DRAWING MODE: Index up, Middle down
+                if itip.y < iknuckle.y and mtip.y > mknuckle.y:
                     if self.prev_x != 0 and self.prev_y != 0:
                         cv2.line(self.canvas, (self.prev_x, self.prev_y), (x, y), (0, 255, 255), 10)
                     self.prev_x, self.prev_y = x, y
+                # HOVER/STOP MODE: Both fingers up or down
                 else:
                     self.prev_x, self.prev_y = 0, 0
         else:
             self.prev_x, self.prev_y = 0, 0
 
-        # Neon Blend
+        # Create Neon Effect
         glow = cv2.GaussianBlur(self.canvas, (13, 13), 0)
         img = cv2.addWeighted(img, 0.6, glow, 0.4, 0)
         img = cv2.add(img, self.canvas)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# Streamer Setup
+# Streamer Configuration
 webrtc_streamer(
-    key="neon-writer",
+    key="neon-writer-render",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    },
     video_processor_factory=VideoProcessor,
     async_processing=True,
 )
