@@ -1,10 +1,6 @@
 import streamlit as st
 import cv2
 import numpy as np
-try:
-    import av
-except ImportError:
-    st.error("Video processing library missing. Please check requirements.")
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
@@ -24,7 +20,8 @@ class VideoProcessor:
         self.canvas = None
         self.prev_x, self.prev_y = 0, 0
 
-    def recv(self, frame):
+    def transform(self, frame):
+        # This replaces the 'recv' method to bypass the 'av' library issues
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
         
@@ -38,21 +35,19 @@ class VideoProcessor:
                 itip = res.landmark[8]
                 x, y = int(itip.x * img.shape[1]), int(itip.y * img.shape[0])
                 
-                # Simple logic: Draw if index is up
-                if itip.y < res.landmark[6].y:
+                if itip.y < res.landmark[6].y: # Index finger up
                     if self.prev_x != 0:
                         cv2.line(self.canvas, (self.prev_x, self.prev_y), (x, y), (0, 255, 255), 10)
                     self.prev_x, self.prev_y = x, y
                 else:
                     self.prev_x, self.prev_y = 0, 0
         
-        combined = cv2.addWeighted(img, 0.5, self.canvas, 0.5, 0)
-        return av.VideoFrame.from_ndarray(combined, format="bgr24")
+        return cv2.addWeighted(img, 0.5, self.canvas, 0.5, 0)
 
 webrtc_streamer(
     key="air-writer",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    video_processor_factory=VideoProcessor,
+    video_frame_callback=VideoProcessor().transform, # Newer bypass method
     async_processing=True,
 )
