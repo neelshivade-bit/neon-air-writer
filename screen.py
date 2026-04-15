@@ -5,95 +5,88 @@ import mediapipe as mp
 import av
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-st.set_page_config(page_title="High-Precision Neon", layout="wide")
+# --- ROBUST MEDIAPIPE INITIALIZATION ---
+# Accessing solutions directly to bypass cloud-specific AttributeErrors
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
 
+st.set_page_config(page_title="Neon Air Writer", layout="wide")
+
+st.title("🎨 Neon Air Writer")
+st.markdown("#### Instructions: Use your **Index Finger** to draw. Raise your **Middle Finger** next to it to stop drawing.")
+
+# Sidebar Settings
 with st.sidebar:
-    st.header("Calibration")
-    # Adjust this if you can't reach the corners of your screen
-    margin = st.slider("Edge Sensitivity", 0, 250, 100, help="Higher = reach corners easier")
-    smoothness = st.slider("Smoothing", 1, 20, 5)
+    st.header("Control Panel")
+    line_color = st.color_picker("Neon Color", "#FF00FF")
+    line_thickness = st.slider("Brush Thickness", 1, 20, 7)
+    # Convert Hex to BGR
+    bgr_color = tuple(int(line_color.lstrip('#')[i:i+2], 16) for i in (4, 2, 0))
+    
     if st.button("🗑️ Clear Canvas"):
-        st.session_state.clear_canvas = True
+        st.session_state["clear_canvas"] = True
 
-class PrecisionProcessor:
+class VideoProcessor:
     def __init__(self):
-        self.canvas = None
-        self.plocX, self.plocY = 0, 0
-        self.hue = 0
-        
-        # INCREASED STRENGTH: We set model_complexity to 1 for better tracking
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
+        self.hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
-            model_complexity=1, 
-            min_detection_confidence=0.8,
-            min_tracking_confidence=0.8
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
         )
+        self.canvas = None
+        self.prev_x, self.prev_y = 0, 0
 
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
         h, w, _ = img.shape
 
-        if self.canvas is None or st.session_state.get("clear_canvas", False):
+        if self.canvas is None or self.canvas.shape != img.shape:
             self.canvas = np.zeros_like(img)
-            st.session_state.clear_canvas = False
 
-        # Convert to RGB for MediaPipe
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(rgb)
+        # Handle Clear Canvas request
+        if st.session_state.get("clear_canvas", False):
+            self.canvas = np.zeros_like(img)
+            st.session_state["clear_canvas"] = False
+
+        results = self.hands.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
         if results.multi_hand_landmarks:
-            # Get the tip of the index finger (8) and the knuckle (6)
-            lm = results.multi_hand_landmarks[0].landmark
-            itip = lm[8]
-            iknuckle = lm[6]
-            mtip = lm[12] # Middle finger tip
+            for hand_landmarks in results.multi_hand_landmarks:
+                # Landmark 8: Index Finger Tip | Landmark 12: Middle Finger Tip
+                idx_tip = hand_landmarks.landmark[8]
+                mid_tip = hand_landmarks.landmark[12]
 
-            # --- FULL SCREEN MAPPING LOGIC ---
-            # This maps a smaller center box in your camera to the full screen
-            # effectively boosting 'detection' at the edges.
-            curr_x = np.interp(itip.x * w, (margin, w - margin), (0, w))
-            curr_y = np.interp(itip.y * h, (margin, h - margin), (0, h))
+                x, y = int(idx_tip.x * w), int(idx_tip.y * h)
 
-            # Smooth the movement
-            clocX = self.plocX + (curr_x - self.plocX) / smoothness
-            clocY = self.plocY + (curr_y - self.plocY) / smoothness
+                # Drawing Logic: Draw if Index is UP but Middle is DOWN
+                # (Comparing Y coordinates: lower value means higher on screen)
+                if idx_tip.y < hand_landmarks.landmark[6].y and mid_tip.y > hand_landmarks.landmark[10].y:
+                    if self.prev_x != 0 and self.prev_y != 0:
+                        cv2.line(self.canvas, (self.prev_x, self.prev_y), (x, y), bgr_color, line_thickness)
+                    self.prev_x, self.prev_y = x, y
+                else:
+                    self.prev_x, self.prev_y = 0, 0
+        else:
+            self.prev_x, self.prev_y = 0, 0
 
-            # GESTURE: Index is UP and Middle is DOWN
-            # This is the most stable 'Pen Down' gesture
-            is_drawing = itip.y < iknuckle.y and mtip.y > lm[10].y
+        # Create Neon Glow Effect
+        glow = cv2.GaussianBlur(self.canvas, (13, 13), 0)
+        img = cv2.addWeighted(img, 0.7, glow, 0.3, 0)
+        img = cv2.add(img, self.canvas)
 
-            if is_drawing:
-                if self.plocX != 0:
-                    # Dynamic Color
-                    color_hsv = np.uint8([[[int(self.hue) % 180, 255, 255]]])
-                    draw_color = tuple(map(int, cv2.cvtColor(color_hsv, cv2.COLOR_HSV2BGR)[0][0]))
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-                    # Draw thick neon and thin white core
-                    cv2.line(self.canvas, (int(self.plocX), int(self.plocY)), (int(clocX), int(clocY)), draw_color, 15)
-                    cv2.line(self.canvas, (int(self.plocX), int(self.plocY)), (int(clocX), int(clocY)), (255, 255, 255), 3)
-                
-                self.plocX, self.plocY = clocX, clocY
-                self.hue = (self.hue + 2) % 180
-            else:
-                # Hovering: Show a ghost cursor for feedback
-                cv2.circle(img, (int(clocX), int(clocY)), 10, (0, 255, 100), 2)
-                self.plocX, self.plocY = 0, 0
-
-        # Create Bloom Effect
-        glow = cv2.GaussianBlur(self.canvas, (21, 21), 0)
-        img = cv2.addWeighted(img, 0.7, glow, 1.8, 0)
-        final_img = cv2.add(img, self.canvas)
-
-        return av.VideoFrame.from_ndarray(final_img, format="bgr24")
+# WebRTC Configuration
+RTC_CONFIG = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
 webrtc_streamer(
-    key="precision-v6",
+    key="neon-writer",
     mode=WebRtcMode.SENDRECV,
-    video_processor_factory=PrecisionProcessor,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    media_stream_constraints={"video": True, "audio": False},
+    rtc_configuration=RTC_CONFIG,
+    video_processor_factory=VideoProcessor,
     async_processing=True,
 )
