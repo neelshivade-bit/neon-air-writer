@@ -1,3 +1,6 @@
+import os
+os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
+
 import streamlit as st
 import cv2
 import numpy as np
@@ -8,6 +11,9 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 # Page Config
 st.set_page_config(page_title="Ultra-Smooth Neon Painter", layout="wide")
+
+# HTTPS Warning
+st.warning("⚠️ Please open this app in HTTPS (required for camera access). Use Chrome browser.")
 
 # Session State
 if "clear_canvas" not in st.session_state:
@@ -22,7 +28,10 @@ with st.sidebar:
     margin = st.slider("Edge Sensitivity", 0, 200, 80)
     smoothness = st.slider("Smoothing", 1, 15, 3)
 
-    color_option = st.selectbox("Brush Color", ["Neon Rainbow", "Green", "Red", "Blue", "White"])
+    color_option = st.selectbox(
+        "Brush Color",
+        ["Neon Rainbow", "Green", "Red", "Blue", "White"]
+    )
 
     if st.button("🗑️ Clear Canvas"):
         st.session_state.clear_canvas = True
@@ -44,19 +53,21 @@ class PrecisionProcessor:
         )
 
     def get_color(self):
-        option = color_option
-
-        if option == "Neon Rainbow":
+        if color_option == "Neon Rainbow":
             self.hue = (self.hue + 3) % 180
-            color = cv2.cvtColor(np.uint8([[[self.hue, 255, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
+            color = cv2.cvtColor(
+                np.uint8([[[self.hue, 255, 255]]]),
+                cv2.COLOR_HSV2BGR
+            )[0][0]
             return int(color[0]), int(color[1]), int(color[2])
-        elif option == "Green":
+
+        elif color_option == "Green":
             return (0, 255, 0)
-        elif option == "Red":
+        elif color_option == "Red":
             return (0, 0, 255)
-        elif option == "Blue":
+        elif color_option == "Blue":
             return (255, 0, 0)
-        elif option == "White":
+        elif color_option == "White":
             return (255, 255, 255)
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
@@ -64,8 +75,9 @@ class PrecisionProcessor:
         img = cv2.flip(img, 1)
         h, w, _ = img.shape
 
+        # Thread-safe canvas reset
         with self.lock:
-            if self.canvas is None or st.session_state.clear_canvas:
+            if self.canvas is None or st.session_state.get("clear_canvas", False):
                 self.canvas = np.zeros_like(img)
                 st.session_state.clear_canvas = False
 
@@ -74,6 +86,7 @@ class PrecisionProcessor:
 
         if results.multi_hand_landmarks:
             lm = results.multi_hand_landmarks[0].landmark
+
             itip = lm[8]
             iknuckle = lm[6]
             mtip = lm[12]
@@ -89,32 +102,50 @@ class PrecisionProcessor:
             if is_drawing:
                 if self.plocX != 0:
                     color = self.get_color()
-
-                    cv2.line(self.canvas, (int(self.plocX), int(self.plocY)),
-                             (int(clocX), int(clocY)), color, 10)
-
+                    cv2.line(
+                        self.canvas,
+                        (int(self.plocX), int(self.plocY)),
+                        (int(clocX), int(clocY)),
+                        color,
+                        10
+                    )
                 self.plocX, self.plocY = clocX, clocY
             else:
                 self.plocX, self.plocY = 0, 0
                 cv2.circle(img, (int(clocX), int(clocY)), 8, (0, 255, 150), 2)
 
-        # Glow effect (optimized)
+        # Glow effect
         glow = cv2.GaussianBlur(self.canvas, (9, 9), 0)
         img = cv2.addWeighted(img, 1.0, glow, 1.2, 0)
         final_img = cv2.add(img, self.canvas)
 
         return av.VideoFrame.from_ndarray(final_img, format="bgr24")
 
-# WebRTC Configuration (FIXED)
+# ✅ UPDATED WebRTC Configuration (STUN + TURN)
 RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {
+            "urls": ["turn:openrelay.metered.ca:80"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+    ]
 })
 
+# ✅ WebRTC Streamer (optimized)
 webrtc_streamer(
     key="neon-paint-v2",
     mode=WebRtcMode.SENDRECV,
     video_processor_factory=PrecisionProcessor,
     rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": True, "audio": False},
+    media_stream_constraints={
+        "video": {
+            "width": {"ideal": 640},
+            "height": {"ideal": 480},
+            "frameRate": {"ideal": 30},
+        },
+        "audio": False,
+    },
     async_processing=True,
 )
